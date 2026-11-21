@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """The Catalogue Photo of an Impossible Gadget.
 
-A pure-stdlib program that paints a studio catalogue photograph of the
-LEVITEA anti-gravity teapot: a brushed-steel teapot whose spout pours a
-stream of tea UPWARD into a porcelain cup floating in mid-air above it.
-The cup is the single accessory. No network, no randomness (fully
-deterministic), writes /output/entry.png (1024x1024 PNG, < 1 MiB).
+Pure-stdlib program (Python 3.13, no network, no randomness) that paints
+a studio catalogue photograph of the LEVITEA anti-gravity teapot: a
+brushed-steel teapot whose spout pours a stream of tea UPWARD into a
+porcelain cup floating in mid-air above it. The cup is the single
+accessory. Writes /output/entry.png (1024x1024 PNG, < 1 MiB).
+Deterministic: repeated runs are byte-identical.
 """
 import math
-import os
 import struct
 import zlib
 from pathlib import Path
@@ -18,6 +18,8 @@ W = H = 1024
 
 # ---------------------------------------------------------------- canvas
 class Canvas:
+    """Tiny software rasterizer over a 1024x1024 RGB bytearray."""
+
     def __init__(self):
         self.px = bytearray(W * H * 3)
 
@@ -31,13 +33,6 @@ class Canvas:
         px[i] = int(px[i] * (1 - a) + r * a)
         px[i + 1] = int(px[i + 1] * (1 - a) + g * a)
         px[i + 2] = int(px[i + 2] * (1 - a) + b * a)
-
-    def set(self, x, y, r, g, b):
-        if 0 <= x < W and 0 <= y < H:
-            i = (y * W + x) * 3
-            self.px[i] = r
-            self.px[i + 1] = g
-            self.px[i + 2] = b
 
     def vgrad(self, top, bottom):
         for y in range(H):
@@ -53,7 +48,6 @@ class Canvas:
                 self.px[i + 2] = b
 
     def radial_light(self, cx, cy, radius, amount):
-        """Gentle brightening towards (cx, cy), like a softbox."""
         x0 = max(0, int(cx - radius))
         x1 = min(W, int(cx + radius))
         y0 = max(0, int(cy - radius))
@@ -73,7 +67,7 @@ class Canvas:
                 px[i + 2] = min(255, int(px[i + 2] + (255 - px[i + 2]) * a))
 
     def soft_ellipse(self, cx, cy, rx, ry, color, alpha_max):
-        """Blurred shadow ellipse with smooth falloff."""
+        """Blurred shadow ellipse with smooth quadratic falloff."""
         x0 = max(0, int(cx - rx))
         x1 = min(W, int(cx + rx) + 1)
         y0 = max(0, int(cy - ry))
@@ -122,7 +116,7 @@ class Canvas:
                                alpha * edge)
 
     def poly(self, pts, color, alpha=1.0):
-        """Scanline fill of a polygon (list of (x, y))."""
+        """Scanline fill of a polygon."""
         ys = [p[1] for p in pts]
         y0 = max(0, int(min(ys)))
         y1 = min(H - 1, int(max(ys)) + 1)
@@ -143,8 +137,7 @@ class Canvas:
                     self.blend(x, y, color[0], color[1], color[2], alpha)
 
     def thick_polyline(self, pts, widths, color, alpha=1.0):
-        """Stroke a polyline with round joins/caps; widths per point."""
-        # dense resample
+        """Stroke a polyline with round joins; widths are per point."""
         dense = []
         for i in range(len(pts) - 1):
             x1, y1 = pts[i]
@@ -158,8 +151,7 @@ class Canvas:
                               w1 + (w2 - w1) * t))
         dense.append((pts[-1][0], pts[-1][1], widths[-1]))
         for (x, y, w) in dense:
-            r = w / 2.0
-            self.disc(x, y, r, color, alpha)
+            self.disc(x, y, w / 2.0, color, alpha)
 
 
 # ------------------------------------------------------------ tiny font
@@ -207,13 +199,11 @@ def lerp(a, b, t):
 
 
 def steel_shade(t):
-    """Brushed steel: bright left, dark right, with a soft highlight band."""
-    # t in [0,1] across the body, 0 = left edge
+    """Brushed steel: bright left, dark right, soft highlight band."""
     base = lerp(96, 226, t)
     band = 46 * math.exp(-((t - 0.30) ** 2) / 0.012)
     edge = 26 * math.exp(-((t - 0.97) ** 2) / 0.004)
-    v = base + band - edge
-    v = max(58, min(238, v))
+    v = max(58, min(238, base + band - edge))
     return (int(v), int(v * 1.005), int(min(255, v * 1.03)))
 
 
@@ -237,9 +227,9 @@ def paint():
     cv.vgrad((236, 234, 230), (203, 200, 195))
     cv.radial_light(360, 300, 700, 0.10)
 
-    # --- contact shadow under the teapot (grounds the hero) ---
+    # Contact shadow under the teapot grounds the hero.
     cv.soft_ellipse(470, 812, 265, 34, (58, 53, 48), 0.42)
-    # --- soft shadow of the floating cup on the backdrop ---
+    # Soft shadow of the floating cup on the backdrop sells the hover.
     cv.soft_ellipse(600, 296, 120, 22, (90, 86, 80), 0.14)
 
     # --- teapot body: superellipse, brushed steel ---
@@ -255,15 +245,12 @@ def paint():
         half = a * (1.0 - dy ** n) ** (1.0 / n)
         for x in range(int(cx - half), int(cx + half) + 1):
             t = (x - (cx - a)) / (2 * a)
-            # vertical shading: slightly darker towards the base
             vshade = 1.0 - 0.10 * max(0.0, (y - cy) / b)
-            # fine brushed streaks, deterministic
             streak = 5 * math.sin(x * 1.9 + 2.0 * math.sin(y * 0.05))
             r, g, bl = steel_shade(t)
             r = max(40, min(245, int(r * vshade + streak)))
             g = max(40, min(245, int(g * vshade + streak)))
             bl = max(40, min(250, int(bl * vshade + streak)))
-            # anti-aliased rim
             edge = min(1.0, (half - abs(x - cx)) / 1.5 + 0.15)
             cv.blend(x, y, r, g, bl, min(1.0, edge))
 
@@ -271,13 +258,12 @@ def paint():
     cv.ellipse(470, 792, 150, 16, (96, 100, 108), 0.85)
     cv.ellipse(470, 788, 150, 14, (150, 154, 162), 0.9)
 
-    # --- lid: dome + knob ---
+    # --- lid: dome + knob + top highlight ---
     cv.ellipse(470, 436, 152, 40, (196, 200, 208), 1.0)
     cv.ellipse(470, 430, 152, 34, steel_shade(0.42), 1.0)
     cv.ellipse(430, 420, 70, 12, (226, 230, 236), 0.55)
     cv.disc(470, 398, 26, (150, 155, 164), 1.0)
     cv.disc(464, 392, 12, (215, 219, 226), 0.9)
-    cv.disc(470, 398, 26, (0, 0, 0), 0.0)  # no-op keeps shape explicit
 
     # --- spout: sweeping up to the left, tip pointing at the sky ---
     spout = bez((318, 590), (252, 520), (238, 440), (284, 372), 36)
@@ -295,7 +281,7 @@ def paint():
 
     # --- handle: bold C on the right, dark edge so it reads on paper ---
     handle = bez((652, 528), (762, 560), (772, 660), (656, 700), 36)
-    for i, (x, y) in enumerate(handle):
+    for (x, y) in handle:
         cv.disc(x, y, 20, (118, 122, 130), 1.0)
     for i, (x, y) in enumerate(handle):
         t = 0.55 + 0.35 * (i / (len(handle) - 1))
@@ -325,9 +311,11 @@ def paint():
         col = (int(lerp(150, 214, t)), int(lerp(88, 150, t)),
                int(lerp(16, 52, t)))
         cv.disc(x, y, sw[i] / 2.0, col, 1.0)
-    # bright core of the stream
+    # bright core of the stream, plus a second thin highlight strand
     core = bez((288, 360), (332, 272), (428, 220), (536, 210), 36)
     cv.thick_polyline(core, [4] * len(core), (246, 198, 110), 0.75)
+    core2 = bez((280, 356), (322, 266), (420, 212), (530, 204), 30)
+    cv.thick_polyline(core2, [2] * len(core2), (252, 214, 130), 0.5)
     # droplets escaping upward: the pour defies gravity
     for (dx, dy, dr) in [(318, 318, 6), (352, 272, 5), (398, 232, 6),
                          (452, 210, 4), (500, 196, 5)]:
@@ -335,7 +323,6 @@ def paint():
         cv.disc(dx - 1, dy - 1, max(1, dr - 3), (246, 200, 110), 0.9)
 
     # --- the floating cup: the one accessory, hovering, tea inside ---
-    # tilt the cup slightly by drawing it sheared: rim ellipse + body
     cv.ellipse(560, 148, 96, 26, (250, 250, 248), 1.0)          # rim outer
     cv.ellipse(560, 148, 84, 20, (196, 120, 40), 1.0)           # tea surface
     cv.ellipse(560, 147, 84, 20, (226, 168, 84), 0.55)          # tea light
@@ -346,6 +333,9 @@ def paint():
             (210, 210, 206), 1.0)                                # left shade
     cv.poly([(622, 150), (650, 150), (634, 216), (626, 216)],
             (226, 226, 222), 1.0)                                # right light
+    # left-edge highlight stripe on the cup body (on the white, not the shade)
+    cv.thick_polyline([(493, 158), (489, 208)], [5, 5],
+                      (255, 255, 255), 0.7)
     cv.ellipse(560, 216, 66, 12, (228, 228, 224), 1.0)          # base
     # cup handle
     cup_h = bez((648, 158), (690, 164), (690, 196), (644, 200), 20)
@@ -362,8 +352,7 @@ def paint():
         dy = (y - H / 2) / (H / 2)
         rest = 0.86 - dy * dy
         if rest <= 0.0:
-            xs = range(W)
-            for x in xs:
+            for x in range(W):
                 dx = (x - W / 2) / (W / 2)
                 d = dx * dx + dy * dy
                 a = min(0.10, (d - 0.86) * 0.35)
